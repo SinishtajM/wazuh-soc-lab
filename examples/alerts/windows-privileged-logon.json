@@ -1,0 +1,35 @@
+{
+  "timestamp": "<timestamp>",
+  "agent": {
+    "id": "<windows-agent-id>",
+    "name": "<windows-agent>"
+  },
+  "rule": {
+    "id": "67028",
+    "level": 3,
+    "description": "Special privileges assigned to new logon.",
+    "groups": [
+      "windows",
+      " WEF"
+    ]
+  },
+  "decoder": {
+    "name": "windows_eventchannel"
+  },
+  "data": {
+    "win": {
+      "system": {
+        "eventID": "4672",
+        "channel": "Security",
+        "providerName": "Microsoft-Windows-Security-Auditing"
+      },
+      "eventdata": {
+        "subjectUserSid": "<user-sid>",
+        "subjectUserName": "<user>",
+        "subjectDomainName": "<domain>",
+        "subjectLogonId": "<logon-id>",
+        "privilegeList": "SeSecurityPrivilege     SeTakeOwnershipPrivilege     SeLoadDriverPrivilege     SeBackupPrivilege     SeRestorePrivilege     SeDebugPrivilege     SeSystemEnvironmentPrivilege     SeImpersonatePrivilege     SeDelegateSessionUserImpersonatePrivilege"
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+<!--
+  Lab custom rules captured for portfolio documentation.
+
+  Validate XML and ruleset configuration with /var/ossec/bin/wazuh-analysisd -t
+  before restarting the Wazuh manager. Use wazuh-logtest when the production
+  decoder path can be reproduced, and complete live endpoint validation for
+  EventChannel-dependent rules. Thresholds and tuning conditions must be
+  reviewed before production use.
+-->
+
+<group name="custom_ssh,authentication_failed,brute_force,">
+  <!-- Lab-sensitive threshold: tune frequency/timeframe for production. -->
+  <rule id="100100" level="10" frequency="3" timeframe="120">
+    <if_matched_sid>5760</if_matched_sid>
+    <same_srcip />
+    <description>Custom rule: Possible SSH brute force from $(srcip) - 3 failed SSH logins within 120 seconds</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,ssh,brute_force,mitre_attack,</group>
+  </rule>
+</group>
+
+<group name="custom_windows,powershell,tuning,">
+  <!--
+    Narrow tuning rule based on a revalidated Sysmon Event ID 11 alert.
+
+    All field conditions are required: the expected Sysmon event type, the
+    complete user Temp path and policy-test filename, and the Windows
+    PowerShell executable path. Path separators accept one or two literal
+    backslashes because Windows EventChannel decoded fields may preserve
+    doubled separators while standalone JSON test fixtures decode to one.
+  -->
+  <rule id="100101" level="3">
+    <if_sid>92213</if_sid>
+    <field name="win.system.eventID" type="pcre2">^11$</field>
+    <field name="win.eventdata.targetFilename" type="pcre2">(?i)^C:[\\]{1,2}Users[\\]{1,2}[^\\]+[\\]{1,2}AppData[\\]{1,2}Local[\\]{1,2}Temp[\\]{1,2}__PSScriptPolicyTest_[^\\]+\.ps1$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)^C:[\\]{1,2}Windows[\\]{1,2}System32[\\]{1,2}WindowsPowerShell[\\]{1,2}v1\.0[\\]{1,2}powershell\.exe$</field>
+    <description>Custom tuning: Expected Windows PowerShell policy-test file created in a user Temp directory</description>
+    <group>windows,sysmon,powershell,false_positive_tuned,</group>
+  </rule>
+</group>

@@ -1,0 +1,29 @@
+{
+  "timestamp": "<timestamp>",
+  "agent": {
+    "id": "<linux-agent-id>",
+    "name": "<linux-agent>"
+  },
+  "rule": {
+    "id": "100100",
+    "level": 10,
+    "description": "Custom rule: Possible SSH brute force from <source-address> - 3 failed SSH logins within 120 seconds",
+    "frequency": 3,
+    "groups": [
+      "custom_ssh",
+      "authentication_failed",
+      "brute_force",
+      "authentication_failed",
+      "ssh",
+      "brute_force",
+      "mitre_attack"
+    ]
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "data": {
+    "srcip": "<source-address>",
+    "dstuser": "<account>"
+  }
+}

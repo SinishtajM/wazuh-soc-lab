@@ -1,0 +1,286 @@
+name: Repository audit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate JSON examples and normalized JSONL fixture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import pathlib
+
+          examples = sorted(pathlib.Path("examples/alerts").glob("*.json"))
+          if len(examples) != 4:
+              raise SystemExit(f"Expected 4 alert examples, found {len(examples)}")
+          for path in examples:
+              json.loads(path.read_text(encoding="utf-8"))
+              print(f"JSON valid: {path}")
+
+          fixture = pathlib.Path("rules/tests/powershell-policy-test-events.jsonl")
+          lines = fixture.read_text(encoding="utf-8").splitlines()
+          if len(lines) != 4:
+              raise SystemExit(f"Expected 4 JSONL events, found {len(lines)}")
+
+          events = [json.loads(line) for line in lines]
+          for index, event in enumerate(events, start=1):
+              system = event["win"]["system"]
+              eventdata = event["win"]["eventdata"]
+              if "message" in system:
+                  raise SystemExit(f"Rendered message retained in JSONL event {index}")
+              if system.get("computer") != "lab-windows-endpoint":
+                  raise SystemExit(f"Unexpected endpoint fixture value in event {index}")
+              if eventdata.get("user") != r"lab-windows-endpoint\test-user":
+                  raise SystemExit(f"Unexpected user fixture value in event {index}")
+
+          expected_targets = [
+              r"C:\Users\test-user\AppData\Local\Temp\__PSScriptPolicyTest_1234567890.ps1",
+              r"C:\Windows\Temp\__PSScriptPolicyTest_NEGPATH_1234567890.ps1",
+              r"C:\Users\test-user\AppData\Local\Temp\Wazuh_NEGFILENAME_1234567890.ps1",
+              r"C:\Users\test-user\AppData\Local\Temp\__PSScriptPolicyTest_NEGIMAGE_1234567890.ps1",
+          ]
+          actual_targets = [event["win"]["eventdata"]["targetFilename"] for event in events]
+          if actual_targets != expected_targets:
+              raise SystemExit("JSONL target-path cases do not match the documented matrix")
+
+          expected_images = [
+              r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+              r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+              r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+              r"C:\Windows\System32\cmd.exe",
+          ]
+          actual_images = [event["win"]["eventdata"]["image"] for event in events]
+          if actual_images != expected_images:
+              raise SystemExit("JSONL creating-image cases do not match the documented matrix")
+
+          retired_values = (
+              "win11-endpoint",
+              "ubuntu-endpoint",
+              "labuser",
+              "1460308337",
+              '"eventRecordID":"20001"',
+              '"eventRecordID":"20002"',
+              '"eventRecordID":"20003"',
+              '"eventRecordID":"20004"',
+          )
+          fixture_text = fixture.read_text(encoding="utf-8")
+          for value in retired_values:
+              if value in fixture_text:
+                  raise SystemExit(f"Retired source-derived fixture value remains: {value}")
+
+          print("Normalized JSONL fixture is valid and aligned with documentation")
+          PY
+
+      - name: Validate custom-rule XML structure
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          content = pathlib.Path("rules/local_rules.xml").read_text(encoding="utf-8")
+          ET.fromstring(f"<ruleset>{content}</ruleset>")
+          print("Custom-rule XML structure is valid")
+          PY
+
+      - name: Validate relative Markdown links
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import pathlib
+          import re
+          import urllib.parse
+
+          failures: list[str] = []
+          pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+          for markdown in pathlib.Path(".").rglob("*.md"):
+              if ".git" in markdown.parts:
+                  continue
+              text = markdown.read_text(encoding="utf-8")
+              for target in pattern.findall(text):
+                  target = target.strip().split()[0]
+                  if target.startswith(("http://", "https://", "mailto:", "#")):
+                      continue
+                  relative = urllib.parse.unquote(target.split("#", 1)[0])
+                  if not relative:
+                      continue
+                  resolved = (markdown.parent / relative).resolve()
+                  if not resolved.exists():
+                      failures.append(f"{markdown}: {target}")
+          if failures:
+              raise SystemExit("Broken relative Markdown links:\n" + "\n".join(failures))
+          print("Relative Markdown links are valid")
+          PY
+
+      - name: Validate PNG structure, CRCs, and metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import pathlib
+          import struct
+          import zlib
+
+          signature = b"\x89PNG\r\n\x1a\n"
+          prohibited = {b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME"}
+          images = sorted(pathlib.Path("screenshots").glob("*.png"))
+          if len(images) != 7:
+              raise SystemExit(f"Expected 7 screenshots, found {len(images)}")
+
+          for path in images:
+              data = path.read_bytes()
+              if not data.startswith(signature):
+                  raise SystemExit(f"Invalid PNG signature: {path}")
+              position = len(signature)
+              chunk_types: list[bytes] = []
+              saw_iend = False
+
+              while position < len(data):
+                  if position + 12 > len(data):
+                      raise SystemExit(f"Truncated PNG header: {path}")
+                  length = struct.unpack(">I", data[position : position + 4])[0]
+                  chunk_type = data[position + 4 : position + 8]
+                  chunk_data_start = position + 8
+                  chunk_data_end = chunk_data_start + length
+                  chunk_end = chunk_data_end + 4
+                  if chunk_end > len(data):
+                      raise SystemExit(f"Truncated PNG chunk: {path}")
+
+                  stored_crc = struct.unpack(">I", data[chunk_data_end:chunk_end])[0]
+                  calculated_crc = zlib.crc32(chunk_type)
+                  calculated_crc = zlib.crc32(data[chunk_data_start:chunk_data_end], calculated_crc)
+                  calculated_crc &= 0xFFFFFFFF
+                  if stored_crc != calculated_crc:
+                      raise SystemExit(f"PNG CRC mismatch in {path} chunk {chunk_type!r}")
+
+                  chunk_types.append(chunk_type)
+                  position = chunk_end
+                  if chunk_type == b"IEND":
+                      saw_iend = True
+                      break
+
+              if not saw_iend:
+                  raise SystemExit(f"PNG has no IEND chunk: {path}")
+              if position != len(data):
+                  raise SystemExit(f"Unexpected bytes after IEND: {path}")
+              found = prohibited.intersection(chunk_types)
+              if found:
+                  names = ", ".join(sorted(item.decode("ascii") for item in found))
+                  raise SystemExit(f"Prohibited PNG metadata in {path}: {names}")
+              print(f"PNG clean: {path}")
+          PY
+
+      - name: Verify screenshot changes are metadata-only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import pathlib
+          import struct
+          import subprocess
+
+          signature = b"\x89PNG\r\n\x1a\n"
+          removable = {b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME"}
+
+          def without_metadata(data: bytes, label: str) -> bytes:
+              if not data.startswith(signature):
+                  raise SystemExit(f"Invalid PNG signature: {label}")
+              output = bytearray(signature)
+              position = len(signature)
+              saw_iend = False
+              while position < len(data):
+                  if position + 12 > len(data):
+                      raise SystemExit(f"Truncated PNG header: {label}")
+                  length = struct.unpack(">I", data[position : position + 4])[0]
+                  chunk_type = data[position + 4 : position + 8]
+                  chunk_end = position + 12 + length
+                  if chunk_end > len(data):
+                      raise SystemExit(f"Truncated PNG chunk: {label}")
+                  if chunk_type not in removable:
+                      output.extend(data[position:chunk_end])
+                  position = chunk_end
+                  if chunk_type == b"IEND":
+                      saw_iend = True
+                      break
+              if not saw_iend or position != len(data):
+                  raise SystemExit(f"Invalid PNG termination: {label}")
+              return bytes(output)
+
+          base_sha = os.environ["BASE_SHA"]
+          for path in sorted(pathlib.Path("screenshots").glob("*.png")):
+              base = subprocess.check_output(["git", "show", f"{base_sha}:{path.as_posix()}"])
+              head = path.read_bytes()
+              if without_metadata(base, f"base:{path}") != head:
+                  raise SystemExit(
+                      f"Screenshot content changed beyond removable metadata chunks: {path}"
+                  )
+              print(f"Metadata-only screenshot change verified: {path}")
+          PY
+
+      - name: Scan UTF-8 text for private IPv4 addresses
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import ipaddress
+          import pathlib
+          import re
+
+          pattern = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])")
+          failures: list[str] = []
+
+          for path in pathlib.Path(".").rglob("*"):
+              if not path.is_file() or ".git" in path.parts or path.suffix.lower() == ".png":
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for candidate in pattern.findall(text):
+                  try:
+                      address = ipaddress.ip_address(candidate)
+                  except ValueError:
+                      continue
+                  if address.is_private:
+                      failures.append(f"{path}: {candidate}")
+
+          if failures:
+              raise SystemExit("Private IPv4 addresses found:\n" + "\n".join(failures))
+          print("No private IPv4 addresses found in UTF-8 text")
+          PY
+
+      - name: Check for common secret formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -En -- 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}' -- ':!*.png'; then
+            echo 'A common secret-like pattern was found.' >&2
+            exit 1
+          fi

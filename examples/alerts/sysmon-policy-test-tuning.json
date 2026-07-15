@@ -1,0 +1,35 @@
+{
+  "timestamp": "<timestamp>",
+  "agent": {
+    "id": "<windows-agent-id>",
+    "name": "<windows-agent>"
+  },
+  "rule": {
+    "id": "100101",
+    "level": 3,
+    "description": "Custom tuning: Expected Windows PowerShell policy-test file created in a user Temp directory",
+    "groups": [
+      "custom_windows",
+      "powershell",
+      "tuning",
+      "windows",
+      "sysmon",
+      "powershell",
+      "false_positive_tuned"
+    ]
+  },
+  "decoder": {
+    "name": "windows_eventchannel"
+  },
+  "data": {
+    "win": {
+      "system": {
+        "eventID": "11"
+      },
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "targetFilename": "C:\\Users\\<user>\\AppData\\Local\\Temp\\__PSScriptPolicyTest_<id>.ps1"
+      }
+    }
+  }
+}
